@@ -1,2 +1,130 @@
+<?php
+/*
+Plugin Name: WWCCS WooCommerce Change Log
+Plugin URI: https://sweb.uk
+Description: A description of my custom plugin.
+Version: 1.0.0
+Author: Sweb
+Author URI: https://sweb.uk
+License: GPLv2 or later
+License URI: https://www.gnu.org/licenses/gpl-2.0.html
+*/
+if ( ! defined( 'ABSPATH' ) ) {
+	exit; // Exit if accessed directly.
+}
 
-
+
+// Use Carbon Fields for the changelog editor
+use Carbon_Fields\Container;
+use Carbon_Fields\Field;
+
+// Register changelog fields for products
+add_action( 'carbon_fields_register_fields', 'wwccs_rewrite_register_changelog_fields' );
+function wwccs_rewrite_register_changelog_fields() {
+    Container::make( 'post_meta', __( 'Changelog', 'wwccs-woocommerce-change-log' ) )
+        ->where( 'post_type', '=', 'product' )
+        ->add_fields( array(
+            Field::make( 'checkbox', 'wwccs_rewrite_enable_changelog', __( 'Enable Changelog', 'wwccs-woocommerce-change-log' ) )
+                ->set_option_value( 'yes' )
+                ->set_help_text( 'Check to enable changelog for this product.' ),
+            Field::make( 'complex', 'wwccs_rewrite_product_changelog', __( 'Changelog Entries', 'wwccs-woocommerce-change-log' ) )
+                ->set_layout( 'tabbed-vertical' )
+                ->add_fields( array(
+                    Field::make( 'text', 'version', __( 'Version Number', 'wwccs-woocommerce-change-log' ) )
+                        ->set_help_text( 'Enter the version number for this changelog entry.' ),
+                    Field::make( 'date', 'date', __( 'Date', 'wwccs-woocommerce-change-log' ) )
+                        ->set_storage_format( 'Y-m-d' )
+                        ->set_input_format( 'Y-m-d', 'Y-m-d' )
+                        ->set_help_text( 'The date this version was released.' ),
+                    Field::make( 'select', 'type', __( 'Entry Type', 'wwccs-woocommerce-change-log' ) )
+                        ->add_options( array(
+                            'new' => 'New Feature',
+                            'fix' => 'Bug Fix',
+                            'issue' => 'Issue',
+                        ) )
+                        ->set_help_text( 'Select the type of changelog entry.' ),
+                    Field::make( 'rich_text', 'description', __( 'Description', 'wwccs-woocommerce-change-log' ) )
+                        ->set_help_text( 'Enter the details of the changelog entry.' ),
+                ) )
+                ->set_conditional_logic( array(
+                    array(
+                        'field' => 'wwccs_rewrite_enable_changelog',
+                        'value' => true
+                    )
+                ) ),
+        ) );
+}
+add_action( 'after_setup_theme', 'wwccs_rewrite_carbon_fields_boot' );
+function wwccs_rewrite_carbon_fields_boot() {
+    \Carbon_Fields\Carbon_Fields::boot();
+}
+
+// Add custom tab to product page to display changelog
+add_filter( 'woocommerce_product_tabs', 'wwccs_rewrite_add_product_tab' );
+function wwccs_rewrite_add_product_tab( $tabs ) {
+    $enable_changelog = carbon_get_post_meta( get_the_ID(), 'wwccs_rewrite_enable_changelog' );
+    $changelog = carbon_get_post_meta( get_the_ID(), 'wwccs_rewrite_product_changelog' );
+    if ( $enable_changelog && ! empty( $changelog ) ) {
+        $tabs['changelog_tab'] = array(
+            'title'    => __( 'Changelog', 'wwccs-woocommerce-change-log' ),
+            'priority' => 50,
+            'callback' => 'wwccs_rewrite_display_product_tab',
+        );
+    }
+    return $tabs;
+}
+
+// Display changelog in product tab
+function wwccs_rewrite_display_product_tab() {
+    $changelog = carbon_get_post_meta( get_the_ID(), 'wwccs_rewrite_product_changelog' );
+    if ( ! empty( $changelog ) ) {
+        echo '<h2>' . esc_html__( 'Product Changelog', 'wwccs-woocommerce-change-log' ) . '</h2>';
+        echo '<div class="wwccs-rewrite-changelog-timeline">';
+        
+        // Sort entries by date, newest first
+        usort( $changelog, function ( $a, $b ) {
+            return strtotime( $b['date'] ) - strtotime( $a['date'] );
+        } );
+        
+        foreach ( $changelog as $entry ) {
+            $color_class = 'wwccs-rewrite-changelog-card-neutral';
+            if ( $entry['type'] === 'new' ) {
+                $color_class = 'wwccs-rewrite-changelog-card-new';
+            } elseif ( $entry['type'] === 'issue' ) {
+                $color_class = 'wwccs-rewrite-changelog-card-issue';
+            } elseif ( $entry['type'] === 'fix' ) {
+                $color_class = 'wwccs-rewrite-changelog-card-fix';
+            }
+
+            echo '<div class="wwccs-rewrite-changelog-timeline-entry ' . esc_attr( $color_class ) . '">';
+            echo '<div class="wwccs-rewrite-changelog-timeline-date" style="font-size: 0.85em;">' . esc_html( $entry['date'] ) . '</div>'; // Smaller date size
+            echo '<div class="wwccs-rewrite-changelog-timeline-content">';
+            echo '<h3>' . esc_html( $entry['version'] ) . ' - ' . esc_html( ucfirst( $entry['type'] ) ) . '</h3>';
+            echo '<div>' . wp_kses_post( $entry['description'] ) . '</div>';
+            echo '</div>'; // .wwccs-rewrite-changelog-timeline-content
+            echo '</div>'; // .wwccs-rewrite-changelog-timeline-entry
+        }
+        echo '</div>'; // .wwccs-rewrite-changelog-timeline
+    }
+}
+
+// Enqueue styles for changelog
+add_action( 'wp_enqueue_scripts', 'wwccs_rewrite_enqueue_styles' );
+function wwccs_rewrite_enqueue_styles() {
+    if ( is_product() ) {
+        wp_enqueue_style( 'wwccs-rewrite-changelog-styles', plugin_dir_url( __FILE__ ) . 'assets/css/wwccs-rewrite-changelog-styles.css' );
+        // Adding timeline specific styles
+        wp_add_inline_style( 'wwccs-rewrite-changelog-styles', '.wwccs-rewrite-changelog-timeline { margin: 20px 0; padding: 0; list-style: none; } .wwccs-rewrite-changelog-timeline-entry { margin-bottom: 20px; padding: 15px; border-radius: 5px; } .wwccs-rewrite-changelog-card-new { background-color: #d4f8e8; } .wwccs-rewrite-changelog-card-issue { background-color: #f8d4d4; } .wwccs-rewrite-changelog-card-fix { background-color: #d4e4f8; } .wwccs-rewrite-changelog-timeline-date { font-weight: bold; margin-bottom: 10px; }' );
+    }
+}
+
+// Add shortcode for displaying changelog
+add_shortcode( 'wwccs_rewrite_product_changelog', 'wwccs_rewrite_changelog_shortcode' );
+function wwccs_rewrite_changelog_shortcode( $atts ) {
+    ob_start();
+    wwccs_rewrite_display_product_tab();
+    return ob_get_clean();
+}
+
+?>
+
